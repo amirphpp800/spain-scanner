@@ -5,10 +5,20 @@ echo "   Spain IP Scanner - Termux"
 echo "======================================"
 echo ""
 
-# Make sure tabulate exists
+# Check & download CIDR files if missing
+if [ ! -f "ipv4.txt" ]; then
+    echo "[*] Downloading ipv4.txt..."
+    curl -sO https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv4.txt
+fi
+if [ ! -f "ipv6.txt" ]; then
+    echo "[*] Downloading ipv6.txt..."
+    curl -sO https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv6.txt
+fi
+
+# Make sure Python module tabulate is installed
 pip show tabulate > /dev/null 2>&1 || pip install tabulate
 
-# Create python script inside temp file
+# Create Python scanner
 cat << 'EOF' > /tmp/ip_scanner.py
 import random
 import ipaddress
@@ -16,7 +26,7 @@ import subprocess
 import os
 from tabulate import tabulate
 
-# ANSI Colors
+# Colors
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -24,12 +34,8 @@ BLUE = "\033[94m"
 RESET = "\033[0m"
 
 def load_cidrs(filename):
-    try:
-        with open(filename, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except FileNotFoundError:
-        print(f"{RED}[ERROR]{RESET} CIDR file {filename} not found!")
-        exit()
+    with open(filename, "r") as f:
+        return [line.strip() for line in f if line.strip()]
 
 def generate_random_ip(cidr):
     net = ipaddress.ip_network(cidr, strict=False)
@@ -57,7 +63,6 @@ def scan_ips(filename, limit, ping_mode=True):
             cidr = random.choice(cidrs)
 
         ip = generate_random_ip(cidr)
-        status = None
 
         if ping_mode:
             if ping_ip(ip):
@@ -72,10 +77,8 @@ def scan_ips(filename, limit, ping_mode=True):
 
         results.append([ip, cidr, status])
         os.system("clear")
-        print(f"{YELLOW}Scanning... Found {len(live_ips)}/{limit} live IPs{RESET}")
+        print(f"{YELLOW}Scanning... Found {len(live_ips)}/{limit} IPs{RESET}")
         print(tabulate(results, headers=[f"{BLUE}IP Address{RESET}", f"{BLUE}CIDR{RESET}", f"{BLUE}Status{RESET}"], tablefmt="fancy_grid"))
-
-    return live_ips
 
 if __name__ == "__main__":
     print(f"{GREEN}1️⃣ IPv4 Ping Test{RESET}")
@@ -84,17 +87,15 @@ if __name__ == "__main__":
     choice = input(f"{YELLOW}Select mode: {RESET}").strip()
 
     if choice == "1":
-        limit = int(input(f"{YELLOW}Number of live IPv4 addresses needed: {RESET}"))
+        limit = int(input(f"{YELLOW}Number of live IPv4 addresses: {RESET}"))
         scan_ips("ipv4.txt", limit, ping_mode=True)
-
     elif choice == "2":
-        limit = int(input(f"{YELLOW}Number of live IPv6 addresses needed: {RESET}"))
+        limit = int(input(f"{YELLOW}Number of live IPv6 addresses: {RESET}"))
         scan_ips("ipv6.txt", limit, ping_mode=True)
-
     elif choice == "3":
         limit = int(input(f"{YELLOW}Number of generated IPv6 addresses: {RESET}"))
         scan_ips("ipv6.txt", limit, ping_mode=False)
 EOF
 
-# Run the Python script
+# Run scanner
 python /tmp/ip_scanner.py
