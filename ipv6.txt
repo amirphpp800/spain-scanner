@@ -1,14 +1,4 @@
-# IP lists by country
-# Address type: IPv6
-# Country: Spain (ES)
-# Date: 2025-08-11
-# URL: https://www-public.telecom-sudparis.eu/~maigron/rir-stats/rir-delegations/ip-lists/ipv6/es-ipv6-list.txt
-# Format: "Address/Prefix"
-
-# Source: APNIC
 2001:df6:e600::/48
-
-# Source: RIPE NCC
 2001:720::/29
 2001:a50::/32
 2001:ac0::/29
