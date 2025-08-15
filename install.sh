@@ -21,25 +21,17 @@ NAMED_V6_IN_WORKDIR="$WORK_DIR/ipv6.txt"
 # --- Styling / Colors ---
 init_colors() {
   if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
-    RESET="\033[0m"
-    BOLD="\033[1m"
-    DIM="\033[2m"
-    RED="\033[31m"
-    GREEN="\033[32m"
-    YELLOW="\033[33m"
-    BLUE="\033[34m"
-    MAGENTA="\033[35m"
-    CYAN="\033[36m"
-    GRAY="\033[90m"
+    RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"
+    RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"; MAGENTA="\033[35m"; CYAN="\033[36m"; GRAY="\033[90m"
   else
     RESET=""; BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; GRAY=""
   fi
 }
 
 print_banner() {
-  printf "${BOLD}${MAGENTA}┌─────────────────────────────────────────────────────┐${RESET}\n"
-  printf "${BOLD}${MAGENTA}│${RESET}  ${BOLD}${CYAN}Spain IP Scanner${RESET}  ${GRAY}• IPv4/IPv6 CIDR Picker${RESET}  ${BOLD}${MAGENTA}│${RESET}\n"
-  printf "${BOLD}${MAGENTA}└─────────────────────────────────────────────────────┘${RESET}\n"
+  printf '%b' "${BOLD}${MAGENTA}┌─────────────────────────────────────────────────────┐${RESET}\n"
+  printf '%b' "${BOLD}${MAGENTA}│${RESET}  ${BOLD}${CYAN}Spain IP Scanner${RESET}  ${GRAY}• IPv4/IPv6 CIDR Picker${RESET}  ${BOLD}${MAGENTA}│${RESET}\n"
+  printf '%b' "${BOLD}${MAGENTA}└─────────────────────────────────────────────────────┘${RESET}\n"
 }
 
 print_panel() {
@@ -49,36 +41,32 @@ print_panel() {
   local width=${COLUMNS:-70}
   [ "$width" -lt 40 ] && width=70
   local inner=$((width-2))
-  printf "${BOLD}${MAGENTA}┌"; for _ in $(seq 1 "$inner"); do printf "─"; done; printf "┐${RESET}\n"
-  printf "${BOLD}${MAGENTA}│${RESET} ${BOLD}${title}${RESET}"
+  printf '%b' "${BOLD}${MAGENTA}┌"; for _ in $(seq 1 "$inner"); do printf '─'; done; printf '%b' "┐${RESET}\n"
+  printf '%b' "${BOLD}${MAGENTA}│${RESET} ${BOLD}${title}${RESET}"
   local title_len=${#title}
   local rest=$((inner-1-title_len))
   [ "$rest" -lt 0 ] && rest=0
-  for _ in $(seq 1 "$rest"); do printf " "; done
-  printf "${BOLD}${MAGENTA}│${RESET}\n"
+  for _ in $(seq 1 "$rest"); do printf ' '; done
+  printf '%b' "${BOLD}${MAGENTA}│${RESET}\n"
+  # Expand escapes in body (\n and color codes)
   local __save_ifs="$IFS"; IFS=$'\n'
-  for line in $body; do
-    printf "${BOLD}${MAGENTA}│${RESET} %s" "$line"
+  local body_expanded
+  body_expanded=$(printf '%b' "$body")
+  for line in $body_expanded; do
+    printf '%b' "${BOLD}${MAGENTA}│${RESET} "
+    printf '%b' "$line"
     local pad=$((inner-1-${#line}))
     [ "$pad" -lt 0 ] && pad=0
-    for _ in $(seq 1 "$pad"); do printf " "; done
-    printf "${BOLD}${MAGENTA}│${RESET}\n"
+    for _ in $(seq 1 "$pad"); do printf ' '; done
+    printf '%b' "${BOLD}${MAGENTA}│${RESET}\n"
   done
   IFS="$__save_ifs"
-  printf "${BOLD}${MAGENTA}└"; for _ in $(seq 1 "$inner"); do printf "─"; done; printf "┘${RESET}\n"
+  printf '%b' "${BOLD}${MAGENTA}└"; for _ in $(seq 1 "$inner"); do printf '─'; done; printf '%b' "┘${RESET}\n"
 }
 
-print_err() {
-  printf "${BOLD}${RED}[✖]${RESET} %s\n" "$*" 1>&2
-}
-
-print_info() {
-  printf "${BOLD}${CYAN}[i]${RESET} %s\n" "$*"
-}
-
-print_ok() {
-  printf "${BOLD}${GREEN}[✔]${RESET} %s\n" "$*"
-}
+print_err() { printf '%b' "${BOLD}${RED}[✖]${RESET} "; printf '%b\n' "$*" 1>&2; }
+print_info() { printf '%b' "${BOLD}${CYAN}[i]${RESET} "; printf '%b\n' "$*"; }
+print_ok() { printf '%b' "${BOLD}${GREEN}[✔]${RESET} "; printf '%b\n' "$*"; }
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -288,7 +276,7 @@ scan_ipv4_with_ping() {
       local candidate
       candidate="$(random_ip_from_cidr "$use_range")"
       if ping_ip "$candidate" 4; then
-        printf "${GREEN}%s${RESET}\n" "$candidate"
+        printf '%b\n' "${GREEN}${candidate}${RESET}"
         echo "$candidate" >> "$OUTPUT_V4_ALIVE"
         last_good_range="$use_range"
         alive_found=$((alive_found + 1))
@@ -316,7 +304,7 @@ scan_ipv6_with_ping() {
       local candidate
       candidate="$(random_ip_from_cidr "$use_range")"
       if ping_ip "$candidate" 6; then
-        printf "${GREEN}%s${RESET}\n" "$candidate"
+        printf '%b\n' "${GREEN}${candidate}${RESET}"
         echo "$candidate" >> "$OUTPUT_V6_ALIVE"
         last_good_range="$use_range"
         alive_found=$((alive_found + 1))
@@ -336,7 +324,7 @@ generate_ipv6_without_ping() {
     range="$(pick_one_random_line "$RANGES_V6_FILE")"
     local ip
     ip="$(random_ip_from_cidr "$range")"
-    printf "${GREEN}%s${RESET}\n" "$ip"
+    printf '%b\n' "${GREEN}${ip}${RESET}"
     echo "$ip" >> "$OUTPUT_V6_GEN"
   done
   print_ok "Saved generated IPv6 addresses to: ${BOLD}$OUTPUT_V6_GEN${RESET}"
