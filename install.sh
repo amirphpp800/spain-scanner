@@ -6,26 +6,41 @@ echo "======================================"
 echo ""
 
 # Check & download CIDR files if missing with better error handling
-if [ ! -f "ipv4.txt" ]; then
+echo "[*] Checking CIDR files..."
+if [ ! -f "${SCRIPT_DIR}/ipv4.txt" ]; then
     echo "[*] Downloading ipv4.txt..."
-    if ! curl -sO https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv4.txt; then
+    if ! curl -sL https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv4.txt -o "${SCRIPT_DIR}/ipv4.txt"; then
         echo "[ERROR] Failed to download ipv4.txt"
         exit 1
     fi
+    echo "[✓] ipv4.txt downloaded successfully"
+else
+    echo "[✓] ipv4.txt already exists"
 fi
-if [ ! -f "ipv6.txt" ]; then
+
+if [ ! -f "${SCRIPT_DIR}/ipv6.txt" ]; then
     echo "[*] Downloading ipv6.txt..."
-    if ! curl -sO https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv6.txt; then
+    if ! curl -sL https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv6.txt -o "${SCRIPT_DIR}/ipv6.txt"; then
         echo "[ERROR] Failed to download ipv6.txt"
         exit 1
     fi
+    echo "[✓] ipv6.txt downloaded successfully"
+else
+    echo "[✓] ipv6.txt already exists"
 fi
 
 # Install dependencies efficiently
+echo "[*] Checking Python dependencies..."
 pip show tabulate > /dev/null 2>&1 || pip install tabulate
 
-# Create optimized Python scanner
-cat << 'EOF' > /tmp/ip_scanner.py
+# Only create the Python script if it doesn't exist or if it's outdated
+if [ ! -f "${SCRIPT_DIR}/ip_scanner.py" ] || [ "${BASH_SOURCE[0]}" -nt "${SCRIPT_DIR}/ip_scanner.py" ]; then
+    echo "[*] Creating/updating Python scanner..."
+cat << 'EOF
+    echo "[✓] Python scanner created/updated"
+else
+    echo "[✓] Python scanner is up to date"
+fi' > "${SCRIPT_DIR}/ip_scanner.py"
 import random
 import ipaddress
 import subprocess
@@ -58,8 +73,12 @@ class OptimizedScanner:
         
     def load_cidrs(self, filename):
         """Load CIDR ranges with caching and validation"""
+        # Get the script directory to find CIDR files
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(script_dir, filename)
+        
         try:
-            with open(filename, "r") as f:
+            with open(filepath, "r") as f:
                 cidrs = []
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
@@ -73,13 +92,14 @@ class OptimizedScanner:
                             continue
             
             if not cidrs:
-                print(f"{RED}[ERROR]{RESET} No valid CIDR ranges found in {filename}")
+                print(f"{RED}[ERROR]{RESET} No valid CIDR ranges found in {filepath}")
                 exit(1)
             
-            print(f"{GREEN}[INFO]{RESET} Loaded {len(cidrs)} valid CIDR ranges")
+            print(f"{GREEN}[INFO]{RESET} Loaded {len(cidrs)} valid CIDR ranges from {filename}")
             return cidrs
         except FileNotFoundError:
-            print(f"{RED}[ERROR]{RESET} File {filename} not found!")
+            print(f"{RED}[ERROR]{RESET} File {filepath} not found!")
+            print(f"{YELLOW}[INFO]{RESET} Make sure {filename} exists in the script directory")
             exit(1)
 
     def generate_random_ip_fast(self, cidr):
@@ -332,5 +352,6 @@ if __name__ == "__main__":
         print(f"\n{RED}[ERROR]{RESET} Unexpected error: {e}")
 EOF
 
-# Run the optimized scanner
-python /tmp/ip_scanner.py
+# Run the optimized scanner from current directory
+cd "${SCRIPT_DIR}"
+python ip_scanner.py
