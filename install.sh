@@ -258,45 +258,6 @@ ping_ip() {
   fi
 }
 
-# IPv6 ping via multiple methods
-ping_ip6_by_method() {
-  local ip="$1"; local method="$2"
-  case "$method" in
-    icmp|icmp3)
-      ping_ip "$ip" 6
-      return $?
-      ;;
-    fping)
-      if command -v fping >/dev/null 2>&1; then
-        fping -6 -c 1 -t 800 "$ip" >/dev/null 2>&1
-        return $?
-      else
-        print_info "fping not installed; falling back to ICMP"
-        ping_ip "$ip" 6
-        return $?
-      fi
-      ;;
-    tcp|tcp:*)
-      local port="443"
-      if [[ "$method" == tcp:* ]]; then port="${method#tcp:}"; fi
-      if ! [[ "$port" =~ ^[0-9]+$ ]]; then port="443"; fi
-      if command -v nc >/dev/null 2>&1; then
-        nc -6 -z -w 1 "$ip" "$port" >/dev/null 2>&1
-        return $?
-      else
-        print_info "nc not installed; falling back to ICMP"
-        ping_ip "$ip" 6
-        return $?
-      fi
-      ;;
-    *)
-      # default ICMP
-      ping_ip "$ip" 6
-      return $?
-      ;;
-  esac
-}
-
 scan_ipv4_with_ping() {
   local target_alive="$1"
   local alive_found=0
@@ -327,12 +288,11 @@ scan_ipv4_with_ping() {
 }
 
 scan_ipv6_with_ping() {
-  local target_alive="$1"; local method="$2"
-  [ -z "$method" ] && method="icmp"
+  local target_alive="$1"
   local alive_found=0
   local last_good_range=""
   : > "$OUTPUT_V6_ALIVE"
-  print_info "Starting ${BOLD}IPv6${RESET} scan to find ${BOLD}$target_alive${RESET} alive IPs ${GRAY}($method)${RESET} ..."
+  print_info "Starting ${BOLD}IPv6${RESET} scan to find ${BOLD}$target_alive${RESET} alive IPs ${GRAY}(3 pings)${RESET} ..."
   while [ "$alive_found" -lt "$target_alive" ]; do
     local use_range
     if [ -n "$last_good_range" ] && should_stick_to_range; then
@@ -343,7 +303,7 @@ scan_ipv6_with_ping() {
     for _ in 1 2 3 4 5; do
       local candidate
       candidate="$(random_ip_from_cidr "$use_range")"
-      if ping_ip6_by_method "$candidate" "$method"; then
+      if ping_ip "$candidate" 6; then
         printf '%b\n' "${GREEN}${candidate}${RESET}"
         echo "$candidate" >> "$OUTPUT_V6_ALIVE"
         last_good_range="$use_range"
@@ -386,45 +346,12 @@ main_menu() {
       scan_ipv4_with_ping "$n"
       ;;
     2)
-      # Sub-menu for IPv6 ping method
-      print_panel "IPv6 ping method" "${YELLOW}1)${RESET} ICMP (ping) ${GRAY}[default]${RESET}\n${YELLOW}2)${RESET} ICMP (fping -6) ${GRAY}(if installed)${RESET}\n${YELLOW}3)${RESET} TCP connect (nc -6 -z) ${GRAY}(if installed)${RESET}"
-      read -rp "Select method [1-3, default 1]: " m
-      m=$(printf "%s" "$m" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-      local method="icmp"
-      case "$m" in
-        2)
-          if command -v fping >/dev/null 2>&1; then
-            method="fping"
-          else
-            print_info "fping not installed; using ICMP"
-            method="icmp"
-          fi
-          ;;
-        3)
-          if command -v nc >/dev/null 2>&1; then
-            read -rp "Enter TCP port [default 443]: " port
-            port=$(printf "%s" "$port" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
-            [ -z "$port" ] && port=443
-            if ! [[ "$port" =~ ^[0-9]+$ ]]; then
-              print_err "Invalid port; using 443"
-              port=443
-            fi
-            method="tcp:$port"
-          else
-            print_info "nc not installed; using ICMP"
-            method="icmp"
-          fi
-          ;;
-        *)
-          method="icmp"
-          ;;
-      esac
       read -rp "How many alive IPv6 addresses to find? N = " n
       n=$(printf "%s" "$n" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
       if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
         print_err "Invalid number."; exit 1
       fi
-      scan_ipv6_with_ping "$n" "$method"
+      scan_ipv6_with_ping "$n"
       ;;
     3)
       read -rp "How many IPv6 addresses to generate? N = " n
