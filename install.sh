@@ -5,6 +5,9 @@ echo "   Spain IP Scanner - Termux (Optimized)"
 echo "======================================"
 echo ""
 
+# Determine script directory for consistent file paths
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 # Check & download CIDR files if missing with better error handling
 echo "[*] Checking CIDR files..."
 if [ ! -f "${SCRIPT_DIR}/ipv4.txt" ]; then
@@ -36,11 +39,7 @@ pip show tabulate > /dev/null 2>&1 || pip install tabulate
 # Only create the Python script if it doesn't exist or if it's outdated
 if [ ! -f "${SCRIPT_DIR}/ip_scanner.py" ] || [ "${BASH_SOURCE[0]}" -nt "${SCRIPT_DIR}/ip_scanner.py" ]; then
     echo "[*] Creating/updating Python scanner..."
-cat << 'EOF
-    echo "[✓] Python scanner created/updated"
-else
-    echo "[✓] Python scanner is up to date"
-fi' > "${SCRIPT_DIR}/ip_scanner.py"
+    cat > "${SCRIPT_DIR}/ip_scanner.py" << 'EOF'
 import random
 import ipaddress
 import subprocess
@@ -351,6 +350,11 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n{RED}[ERROR]{RESET} Unexpected error: {e}")
 EOF
+
+    echo "[✓] Python scanner created/updated"
+else
+    echo "[✓] Python scanner is up to date"
+fi
 
 # Run the optimized scanner from current directory
 cd "${SCRIPT_DIR}"
