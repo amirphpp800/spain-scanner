@@ -1,4 +1,12 @@
 #!/bin/bash
+# Normalize Windows CRLF line endings if present, then re-run once
+if grep -q $'\r' "$0" 2>/dev/null; then
+    sed -i 's/\r$//' "$0" 2>/dev/null || true
+    if [ -z "${RELOADED_AFTER_CRLF_FIX}" ]; then
+        export RELOADED_AFTER_CRLF_FIX=1
+        exec bash "$0" "$@"
+    fi
+fi
 clear
 echo "======================================"
 echo "   Spain IP Scanner - Termux (Optimized)"
