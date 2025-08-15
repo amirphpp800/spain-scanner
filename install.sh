@@ -1,275 +1,295 @@
-#!/bin/bash
-# Spain IP Scanner - Termux Optimized Version
+#!/usr/bin/env bash
 
-# --- Fix CRLF if needed ---
-if grep -q $'\r' "$0" 2>/dev/null; then
-    sed -i 's/\r$//' "$0" 2>/dev/null || true
-    if [ -z "${RELOADED_AFTER_CRLF_FIX}" ]; then
-        export RELOADED_AFTER_CRLF_FIX=1
-        exec bash "$0" "$@"
-    fi
-fi
+# Single entrypoint script to fetch Spain IPv4/IPv6 CIDR ranges and scan/generate IPs
+# Requirements: bash, git, python3, grep, sed, sort. Optional: shuf, ping6 (or ping -6)
 
-# --- UI Header ---
-printf "\033c"
-echo "======================================"
-echo "   Spain IP Scanner - Termux (Optimized)"
-echo "======================================"
-echo ""
+set -o pipefail
 
-# --- Script Path ---
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+REPO_URL="https://github.com/amirphpp800/spain-scanner.git"
+REPO_DIR="spain-scanner"
+WORK_DIR="$(pwd)"
+RANGES_V4_FILE="$WORK_DIR/ranges_ipv4.txt"
+RANGES_V6_FILE="$WORK_DIR/ranges_ipv6.txt"
+OUTPUT_V4_ALIVE="$WORK_DIR/alive_ipv4.txt"
+OUTPUT_V6_ALIVE="$WORK_DIR/alive_ipv6.txt"
+OUTPUT_V6_GEN="$WORK_DIR/generated_ipv6.txt"
 
-# --- Safe Download Function ---
-download_file() {
-    local url="$1"
-    local file="$2"
-    echo "[*] Downloading $file..."
-    if curl -sL --fail "$url" -o "$file"; then
-        if [ -s "$file" ]; then
-            echo "[✓] $file downloaded successfully"
-        else
-            echo "[ERROR] $file is empty after download"
-            rm -f "$file"
-            exit 1
-        fi
-    else
-        echo "[ERROR] Failed to download $file"
-        exit 1
-    fi
+print_err() {
+  echo "[ERROR] $*" 1>&2
 }
 
-# --- Check & Download CIDR Files ---
-echo "[*] Checking CIDR files..."
-[ ! -f "${SCRIPT_DIR}/ipv4.txt" ] && download_file "https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv4.txt" "${SCRIPT_DIR}/ipv4.txt"
-[ ! -f "${SCRIPT_DIR}/ipv6.txt" ] && download_file "https://raw.githubusercontent.com/amirphpp800/spain-scanner/main/ipv6.txt" "${SCRIPT_DIR}/ipv6.txt"
+print_info() {
+  echo "[INFO] $*"
+}
 
-# --- Check Python Dependency ---
-echo "[*] Checking Python dependencies..."
-pip show tabulate > /dev/null 2>&1 || pip install tabulate
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    print_err "Missing required command: $1"
+    exit 1
+  fi
+}
 
-# --- Create / Update Python Scanner ---
-echo "[*] Creating Python scanner..."
-cat > "${SCRIPT_DIR}/ip_scanner.py" << 'EOF'
+detect_ping_support() {
+  # Detect environment to choose correct flags
+  local uname_s="$(uname -s 2>/dev/null || echo unknown)"
+  case "$uname_s" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows ping (via Git-Bash) uses -n and -w (milliseconds)
+      PING_COUNT_FLAG="-n"
+      PING_WAIT_FLAG="-w"
+      ;;
+    *)
+      # Assume GNU/BSD ping with -c and -W (seconds)
+      PING_COUNT_FLAG="-c"
+      PING_WAIT_FLAG="-W"
+      ;;
+  esac
+
+  if command -v ping6 >/dev/null 2>&1; then
+    PING6_BIN="ping6"
+  else
+    PING6_BIN="ping"
+  fi
+}
+
+clone_or_update_repo() {
+  if [ -d "$REPO_DIR/.git" ]; then
+    print_info "Updating existing repo $REPO_DIR ..."
+    git -C "$REPO_DIR" pull --ff-only || print_err "git pull failed; continuing with existing copy"
+  else
+    print_info "Cloning repository $REPO_URL ..."
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR" || {
+      print_err "Failed to clone repository: $REPO_URL"
+      exit 1
+    }
+  fi
+}
+
+extract_ranges() {
+  local kind="$1" # v4 or v6
+  local out_file="$2"
+  local pattern
+  if [ "$kind" = "v4" ]; then
+    pattern='\b([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}\b'
+  else
+    # IPv6 CIDR pattern (coarse): sequences of hex groups and ':' ending with /prefix
+    pattern='\b([0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}/[0-9]{1,3}\b'
+  fi
+
+  print_info "Scanning repo for ${kind} CIDR ranges ..."
+  grep -RhoE "$pattern" "$REPO_DIR" 2>/dev/null | \
+    sed 's/\r$//' | \
+    sed 's/^[ \t]*//;s/[ \t]*$//' | \
+    grep -vE '^#' | \
+    sort -u > "$out_file"
+
+  if [ ! -s "$out_file" ]; then
+    print_err "No ${kind} CIDR ranges found in repository."
+    exit 1
+  fi
+
+  local count
+  count=$(wc -l < "$out_file" | tr -d ' ')
+  print_info "Found $count ${kind} ranges → $out_file"
+}
+
+# Pick one random line from a file, portable across environments
+pick_one_random_line() {
+  local file="$1"
+  if command -v shuf >/dev/null 2>&1; then
+    shuf -n 1 "$file"
+  else
+    python3 - "$file" <<'PY'
+import os, random, sys
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+    lines = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+if not lines:
+    sys.exit(1)
+print(random.choice(lines))
+PY
+  fi
+}
+
+# Generate a random IP address within the given CIDR (IPv4 or IPv6)
+random_ip_from_cidr() {
+  local cidr="$1"
+  python3 - "$cidr" <<'PY'
+import ipaddress, os, random, sys
+cidr = sys.argv[1].strip()
+net = ipaddress.ip_network(cidr, strict=False)
+# For huge subnets, sample uniformly by picking a random host index
+size = net.num_addresses
+# Avoid network/broadcast specifics handled by ipaddress for v4 automatically via hosts();
+# But to keep speed, pick an index and ensure it's not network/broadcast where applicable.
+for _ in range(32):
+    idx = random.randrange(0, size)
+    ip = net[idx]
+    # Skip network/broadcast for IPv4 if present
+    if isinstance(ip, ipaddress.IPv4Address) and (ip == net.network_address or ip == getattr(net, 'broadcast_address', ipaddress.IPv4Address('0.0.0.0'))):
+        continue
+    print(str(ip))
+    sys.exit(0)
+# Fallback: first usable host
+try:
+    print(str(next(net.hosts())))
+except StopIteration:
+    print(str(net.network_address))
+PY
+}
+
+should_stick_to_range() {
+  # 50% probability
+  python3 - <<'PY'
 import random
-import ipaddress
-import subprocess
-import os
-import threading
-import time
-import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tabulate import tabulate
+exit(0 if random.random() < 0.5 else 1)
+PY
+}
 
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-CYAN = "\033[96m"
-MAGENTA = "\033[95m"
-RESET = "\033[0m"
+ping_ip() {
+  local ip="$1"
+  local fam="$2" # 4 or 6
+  local timeout_s=1
+  local timeout_ms=1000
+  local count=3
+  if [ "$fam" = "4" ]; then
+    if [ "$PING_WAIT_FLAG" = "-w" ]; then
+      ping $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_ms" "$ip" >/dev/null 2>&1
+    else
+      ping $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_s" "$ip" >/dev/null 2>&1
+    fi
+  else
+    if [ "$PING6_BIN" = "ping6" ]; then
+      if [ "$PING_WAIT_FLAG" = "-w" ]; then
+        "$PING6_BIN" $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_ms" "$ip" >/dev/null 2>&1
+      else
+        "$PING6_BIN" $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_s" "$ip" >/dev/null 2>&1
+      fi
+    else
+      if [ "$PING_WAIT_FLAG" = "-w" ]; then
+        "$PING6_BIN" -6 $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_ms" "$ip" >/dev/null 2>&1
+      else
+        "$PING6_BIN" -6 $PING_COUNT_FLAG "$count" $PING_WAIT_FLAG "$timeout_s" "$ip" >/dev/null 2>&1
+      fi
+    fi
+  fi
+}
 
-class OptimizedScanner:
-    def __init__(self, max_workers=40, ping_timeout=1):
-        self.max_workers = max_workers
-        self.ping_timeout = ping_timeout
-        self.live_ips = []
-        self.results = []
-        self.scanned_count = 0
-        self.lock = threading.Lock()
-        self.good_cidrs = {}
-        self.start_time = time.time()
-        self.ping_cmd_ipv6 = self.detect_ping_ipv6()
+scan_ipv4_with_ping() {
+  local target_alive="$1"
+  local alive_found=0
+  local last_good_range=""
+  : > "$OUTPUT_V4_ALIVE"
+  print_info "Starting IPv4 scan to find $target_alive alive IPs (3-ping test each) ..."
+  while [ "$alive_found" -lt "$target_alive" ]; do
+    local use_range
+    if [ -n "$last_good_range" ] && should_stick_to_range; then
+      use_range="$last_good_range"
+    else
+      use_range="$(pick_one_random_line "$RANGES_V4_FILE")"
+    fi
+    # Try a few random IPs from this range
+    for _ in 1 2 3 4 5; do
+      local candidate
+      candidate="$(random_ip_from_cidr "$use_range")"
+      if ping_ip "$candidate" 4; then
+        echo "$candidate" | tee -a "$OUTPUT_V4_ALIVE"
+        last_good_range="$use_range"
+        alive_found=$((alive_found + 1))
+        break
+      fi
+    done
+  done
+  print_info "Saved alive IPv4 addresses to: $OUTPUT_V4_ALIVE"
+}
 
-    def detect_ping_ipv6(self):
-        if shutil.which("ping6"):
-            return "ping6"
-        return "ping"
+scan_ipv6_with_ping() {
+  local target_alive="$1"
+  local alive_found=0
+  local last_good_range=""
+  : > "$OUTPUT_V6_ALIVE"
+  print_info "Starting IPv6 scan to find $target_alive alive IPs (3-ping test each) ..."
+  while [ "$alive_found" -lt "$target_alive" ]; do
+    local use_range
+    if [ -n "$last_good_range" ] && should_stick_to_range; then
+      use_range="$last_good_range"
+    else
+      use_range="$(pick_one_random_line "$RANGES_V6_FILE")"
+    fi
+    for _ in 1 2 3 4 5; do
+      local candidate
+      candidate="$(random_ip_from_cidr "$use_range")"
+      if ping_ip "$candidate" 6; then
+        echo "$candidate" | tee -a "$OUTPUT_V6_ALIVE"
+        last_good_range="$use_range"
+        alive_found=$((alive_found + 1))
+        break
+      fi
+    done
+  done
+  print_info "Saved alive IPv6 addresses to: $OUTPUT_V6_ALIVE"
+}
 
-    def load_cidrs(self, filename):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        filepath = os.path.join(script_dir, filename)
-        try:
-            with open(filepath, "r") as f:
-                cidrs = []
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        try:
-                            ipaddress.ip_network(line, strict=False)
-                            cidrs.append(line)
-                        except ValueError:
-                            print(f"{YELLOW}[WARN]{RESET} Invalid CIDR on line {line_num}: {line}")
-            if not cidrs:
-                print(f"{RED}[ERROR]{RESET} No valid CIDR ranges in {filename}")
-                exit(1)
-            return cidrs
-        except FileNotFoundError:
-            print(f"{RED}[ERROR]{RESET} File {filename} not found!")
-            exit(1)
+generate_ipv6_without_ping() {
+  local count="$1"
+  : > "$OUTPUT_V6_GEN"
+  print_info "Generating $count IPv6 addresses from random Spain ranges (no ping) ..."
+  for _ in $(seq 1 "$count"); do
+    local range
+    range="$(pick_one_random_line "$RANGES_V6_FILE")"
+    random_ip_from_cidr "$range" | tee -a "$OUTPUT_V6_GEN"
+  done
+  print_info "Saved generated IPv6 addresses to: $OUTPUT_V6_GEN"
+}
 
-    def generate_random_ip_fast(self, cidr):
-        try:
-            net = ipaddress.ip_network(cidr, strict=False)
-            num_hosts = net.num_addresses - (2 if net.version == 4 else 0)
-            if num_hosts <= 0:
-                return str(net.network_address)
-            rand_offset = random.randrange(1, num_hosts)
-            return str(net.network_address + rand_offset)
-        except:
-            return None
+main_menu() {
+  echo "Select mode:"
+  echo "  1) IPv4 with ping (find N alive)"
+  echo "  2) IPv6 with ping (find N alive)"
+  echo "  3) IPv6 without ping (generate N addresses)"
+  read -rp "Enter choice [1-3]: " choice
+  case "$choice" in
+    1)
+      read -rp "How many alive IPv4 addresses to find? N = " n
+      if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
+        print_err "Invalid number."; exit 1
+      fi
+      scan_ipv4_with_ping "$n"
+      ;;
+    2)
+      read -rp "How many alive IPv6 addresses to find? N = " n
+      if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
+        print_err "Invalid number."; exit 1
+      fi
+      scan_ipv6_with_ping "$n"
+      ;;
+    3)
+      read -rp "How many IPv6 addresses to generate? N = " n
+      if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
+        print_err "Invalid number."; exit 1
+      fi
+      generate_ipv6_without_ping "$n"
+      ;;
+    *)
+      print_err "Invalid choice."; exit 1
+      ;;
+  esac
+}
 
-    def ping_ip_fast(self, ip):
-        try:
-            is_ipv6 = ":" in ip
-            cmd = []
-            if is_ipv6:
-                if self.ping_cmd_ipv6 == "ping6":
-                    cmd = ["ping6", "-c", "1", "-W", str(self.ping_timeout), "-q", "-n", ip]
-                else:
-                    cmd = ["ping", "-6", "-c", "1", "-W", str(self.ping_timeout), "-q", "-n", ip]
-            else:
-                cmd = ["ping", "-c", "1", "-W", str(self.ping_timeout), "-q", "-n", ip]
+setup() {
+  require_cmd git
+  require_cmd grep
+  require_cmd sed
+  require_cmd sort
+  require_cmd python3
+  require_cmd ping
+  detect_ping_support
+  clone_or_update_repo
+  extract_ranges v4 "$RANGES_V4_FILE"
+  extract_ranges v6 "$RANGES_V6_FILE"
+}
 
-            result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=self.ping_timeout + 0.5)
-            return result.returncode == 0
-        except:
-            return False
+setup
+main_menu
 
-    def update_cidr_stats(self, cidr, success):
-        if cidr not in self.good_cidrs:
-            self.good_cidrs[cidr] = {'hits': 0, 'total': 0}
-        self.good_cidrs[cidr]['total'] += 1
-        if success:
-            self.good_cidrs[cidr]['hits'] += 1
 
-    def smart_cidr_selection(self, cidrs):
-        if not self.good_cidrs:
-            return random.choice(cidrs)
-        if random.random() < 0.7:
-            successful_cidrs = [c for c, s in self.good_cidrs.items() if s['hits'] > 0 and s['total'] > 2]
-            if successful_cidrs:
-                weights = [self.good_cidrs[c]['hits'] / self.good_cidrs[c]['total'] for c in successful_cidrs]
-                return random.choices(successful_cidrs, weights=weights)[0]
-        return random.choice(cidrs)
-
-    def scan_worker(self, ip_cidr_pairs, ping_mode, target_limit):
-        for ip, cidr in ip_cidr_pairs:
-            with self.lock:
-                if ping_mode and len(self.live_ips) >= target_limit:
-                    break
-                if not ping_mode and self.scanned_count >= target_limit:
-                    break
-
-            success = False
-            if ping_mode:
-                success = self.ping_ip_fast(ip)
-                if success:
-                    with self.lock:
-                        if len(self.live_ips) < target_limit:
-                            self.live_ips.append(ip)
-                            status = f"{GREEN}LIVE{RESET}"
-                        else:
-                            continue
-                else:
-                    status = f"{RED}DEAD{RESET}"
-            else:
-                with self.lock:
-                    if self.scanned_count < target_limit:
-                        self.live_ips.append(ip)
-                        success = True
-                        status = f"{BLUE}GENERATED{RESET}"
-                    else:
-                        continue
-
-            with self.lock:
-                self.scanned_count += 1
-                self.results.append([ip, cidr, status])
-                self.update_cidr_stats(cidr, success)
-
-    def display_progress(self, target_limit, ping_mode):
-        os.system("clear")
-        current = len(self.live_ips) if ping_mode else self.scanned_count
-        elapsed = time.time() - self.start_time
-        rate = self.scanned_count / max(elapsed, 1)
-        success_rate = (len(self.live_ips) / max(self.scanned_count, 1)) * 100 if ping_mode else 100
-        print(f"{MAGENTA}╔══════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{MAGENTA}║                    SPAIN IP SCANNER STATUS                   ║{RESET}")
-        print(f"{MAGENTA}╠══════════════════════════════════════════════════════════════╣{RESET}")
-        print(f"{MAGENTA}║{RESET} Progress: {YELLOW}{current:>3}/{target_limit:<3}{RESET} {'Live IPs' if ping_mode else 'Generated':<12} {MAGENTA}║{RESET}")
-        print(f"{MAGENTA}║{RESET} Scanned:  {CYAN}{self.scanned_count:>7}{RESET} total IPs                     {MAGENTA}║{RESET}")
-        print(f"{MAGENTA}║{RESET} Rate:     {BLUE}{rate:>7.1f}{RESET} IPs/sec                       {MAGENTA}║{RESET}")
-        print(f"{MAGENTA}║{RESET} Success:  {GREEN}{success_rate:>6.1f}%{RESET}                              {MAGENTA}║{RESET}")
-        print(f"{MAGENTA}║{RESET} Time:     {YELLOW}{elapsed:>7.1f}{RESET} seconds                       {MAGENTA}║{RESET}")
-        print(f"{MAGENTA}╚══════════════════════════════════════════════════════════════╝{RESET}")
-        print()
-        display_results = self.results[-15:] if len(self.results) > 15 else self.results
-        if display_results:
-            print(tabulate(display_results, headers=[f"{BLUE}IP Address{RESET}", f"{BLUE}CIDR Range{RESET}", f"{BLUE}Status{RESET}"], tablefmt="fancy_grid"))
-
-    def scan_ips_optimized(self, filename, limit, ping_mode=True):
-        cidrs = self.load_cidrs(filename)
-        batch_multiplier = 3 if ping_mode else 1
-        total_ips_needed = limit * batch_multiplier
-        ip_batches = []
-        batch_size = min(200, total_ips_needed // self.max_workers + 1)
-        for batch_num in range(0, total_ips_needed, batch_size):
-            batch = []
-            for _ in range(min(batch_size, total_ips_needed - batch_num)):
-                cidr = self.smart_cidr_selection(cidrs)
-                ip = self.generate_random_ip_fast(cidr)
-                if ip:
-                    batch.append((ip, cidr))
-            if batch:
-                ip_batches.append(batch)
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(self.scan_worker, batch, ping_mode, limit) for batch in ip_batches]
-            last_update = 0
-            while any(not f.done() for f in futures):
-                current = len(self.live_ips) if ping_mode else self.scanned_count
-                if time.time() - last_update > 2 or current >= limit:
-                    self.display_progress(limit, ping_mode)
-                    last_update = time.time()
-                    if current >= limit:
-                        for f in futures:
-                            f.cancel()
-                        break
-                time.sleep(0.5)
-            for future in as_completed(futures, timeout=1):
-                try:
-                    future.result()
-                except:
-                    pass
-        self.display_progress(limit, ping_mode)
-        return self.live_ips
-
-def main():
-    print(f"{GREEN}🚀 1️⃣ IPv4 Fast Ping Scan{RESET}")
-    print(f"{GREEN}🚀 2️⃣ IPv6 Fast Ping Scan{RESET}")
-    print(f"{GREEN}⚡ 3️⃣ IPv6 Ultra-Fast Generation{RESET}")
-    choice = input(f"\n{YELLOW}Select mode (1-3): {RESET}").strip()
-    if choice == "1":
-        limit = int(input(f"{YELLOW}Number of live IPv4 addresses: {RESET}"))
-        OptimizedScanner(max_workers=40, ping_timeout=1).scan_ips_optimized("ipv4.txt", limit, True)
-    elif choice == "2":
-        limit = int(input(f"{YELLOW}Number of live IPv6 addresses: {RESET}"))
-        OptimizedScanner(max_workers=35, ping_timeout=1).scan_ips_optimized("ipv6.txt", limit, True)
-    elif choice == "3":
-        limit = int(input(f"{YELLOW}Number of IPv6 addresses to generate: {RESET}"))
-        OptimizedScanner(max_workers=80, ping_timeout=1).scan_ips_optimized("ipv6.txt", limit, False)
-    else:
-        print(f"{RED}[ERROR]{RESET} Invalid choice!")
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n{YELLOW}[INFO]{RESET} Scan interrupted")
-EOF
-
-echo "[✓] Python scanner created/updated"
-
-# --- Run Scanner ---
-cd "${SCRIPT_DIR}"
-python ip_scanner.py
