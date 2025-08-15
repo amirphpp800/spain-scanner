@@ -42,13 +42,6 @@ print_banner() {
   printf "${BOLD}${MAGENTA}└─────────────────────────────────────────────────────┘${RESET}\n"
 }
 
-panel_line() {
-  local char="$1"; local width="$2"
-  printf "%s" "$char"
-  for _ in $(seq 1 "$width"); do printf "%s" "$char"; done
-  printf "%s\n" "$char"
-}
-
 print_panel() {
   # print_panel "Title" "multi\nline\nbody"
   local title="$1"; shift
@@ -63,7 +56,7 @@ print_panel() {
   [ "$rest" -lt 0 ] && rest=0
   for _ in $(seq 1 "$rest"); do printf " "; done
   printf "${BOLD}${MAGENTA}│${RESET}\n"
-  IFS=$'\n'
+  local __save_ifs="$IFS"; IFS=$'\n'
   for line in $body; do
     printf "${BOLD}${MAGENTA}│${RESET} %s" "$line"
     local pad=$((inner-1-${#line}))
@@ -71,6 +64,7 @@ print_panel() {
     for _ in $(seq 1 "$pad"); do printf " "; done
     printf "${BOLD}${MAGENTA}│${RESET}\n"
   done
+  IFS="$__save_ifs"
   printf "${BOLD}${MAGENTA}└"; for _ in $(seq 1 "$inner"); do printf "─"; done; printf "┘${RESET}\n"
 }
 
@@ -350,11 +344,14 @@ generate_ipv6_without_ping() {
 
 main_menu() {
   print_banner
-  print_panel "Select mode" "${YELLOW}1)${RESET} IPv4 with ping ${GRAY}(find N alive)${RESET}\n${YELLOW}2)${RESET} IPv6 with ping ${GRAY}(find N alive)${RESET}\n${YELLOW}3)${RESET} IPv6 without ping ${GRAY}(generate N addresses)${RESET}"
+  print_panel "Select mode" "${YELLOW}1)${RESET} IPv4 with ping ${GRAY}(find N alive)${RESET}\n${YELLOW}2)${RESET} IPv6 with ping ${GRAY}(find N alive)${RESET}\n${YELLOW}3)${RESET} IPv6 without ping ${GRAY}(generate N addresses)${RESET}\n${YELLOW}q)${RESET} Quit"
   read -rp "Enter choice [1-3]: " choice
+  # Normalize input (trim CR/LF and spaces for Git-Bash/Windows)
+  choice=$(printf "%s" "$choice" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
   case "$choice" in
     1)
       read -rp "How many alive IPv4 addresses to find? N = " n
+      n=$(printf "%s" "$n" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
       if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
         print_err "Invalid number."; exit 1
       fi
@@ -362,6 +359,7 @@ main_menu() {
       ;;
     2)
       read -rp "How many alive IPv6 addresses to find? N = " n
+      n=$(printf "%s" "$n" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
       if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
         print_err "Invalid number."; exit 1
       fi
@@ -369,10 +367,15 @@ main_menu() {
       ;;
     3)
       read -rp "How many IPv6 addresses to generate? N = " n
+      n=$(printf "%s" "$n" | tr -d '\r' | sed 's/^[ \t]*//;s/[ \t]*$//')
       if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
         print_err "Invalid number."; exit 1
       fi
       generate_ipv6_without_ping "$n"
+      ;;
+    q|Q)
+      print_info "Bye!"
+      exit 0
       ;;
     *)
       print_err "Invalid choice."; exit 1
