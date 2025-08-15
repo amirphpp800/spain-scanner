@@ -14,12 +14,40 @@ OUTPUT_V4_ALIVE="$WORK_DIR/alive_ipv4.txt"
 OUTPUT_V6_ALIVE="$WORK_DIR/alive_ipv6.txt"
 OUTPUT_V6_GEN="$WORK_DIR/generated_ipv6.txt"
 
+# --- Styling / Colors ---
+init_colors() {
+  if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    RESET="\033[0m"
+    BOLD="\033[1m"
+    DIM="\033[2m"
+    RED="\033[31m"
+    GREEN="\033[32m"
+    YELLOW="\033[33m"
+    BLUE="\033[34m"
+    MAGENTA="\033[35m"
+    CYAN="\033[36m"
+    GRAY="\033[90m"
+  else
+    RESET=""; BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; GRAY=""
+  fi
+}
+
+print_banner() {
+  printf "${BOLD}${MAGENTA}┌─────────────────────────────────────────────────────┐${RESET}\n"
+  printf "${BOLD}${MAGENTA}│${RESET}  ${BOLD}${CYAN}Spain IP Scanner${RESET}  ${GRAY}• IPv4/IPv6 CIDR Picker${RESET}  ${BOLD}${MAGENTA}│${RESET}\n"
+  printf "${BOLD}${MAGENTA}└─────────────────────────────────────────────────────┘${RESET}\n"
+}
+
 print_err() {
-  echo "[ERROR] $*" 1>&2
+  printf "${BOLD}${RED}[✖]${RESET} %s\n" "$*" 1>&2
 }
 
 print_info() {
-  echo "[INFO] $*"
+  printf "${BOLD}${CYAN}[i]${RESET} %s\n" "$*"
+}
+
+print_ok() {
+  printf "${BOLD}${GREEN}[✔]${RESET} %s\n" "$*"
 }
 
 require_cmd() {
@@ -54,10 +82,10 @@ detect_ping_support() {
 
 clone_or_update_repo() {
   if [ -d "$REPO_DIR/.git" ]; then
-    print_info "Updating existing repo $REPO_DIR ..."
+    print_info "Updating existing repo ${BOLD}$REPO_DIR${RESET} ..."
     git -C "$REPO_DIR" pull --ff-only || print_err "git pull failed; continuing with existing copy"
   else
-    print_info "Cloning repository $REPO_URL ..."
+    print_info "Cloning repository ${BOLD}$REPO_URL${RESET} ..."
     git clone --depth 1 "$REPO_URL" "$REPO_DIR" || {
       print_err "Failed to clone repository: $REPO_URL"
       exit 1
@@ -90,7 +118,7 @@ extract_ranges() {
 
   local count
   count=$(wc -l < "$out_file" | tr -d ' ')
-  print_info "Found $count ${kind} ranges → $out_file"
+  print_ok "Found ${BOLD}$count${RESET} ${kind} ranges → ${BOLD}$out_file${RESET}"
 }
 
 # Pick one random line from a file, portable across environments
@@ -180,7 +208,7 @@ scan_ipv4_with_ping() {
   local alive_found=0
   local last_good_range=""
   : > "$OUTPUT_V4_ALIVE"
-  print_info "Starting IPv4 scan to find $target_alive alive IPs (3-ping test each) ..."
+  print_info "Starting ${BOLD}IPv4${RESET} scan to find ${BOLD}$target_alive${RESET} alive IPs ${GRAY}(3 pings)${RESET} ..."
   while [ "$alive_found" -lt "$target_alive" ]; do
     local use_range
     if [ -n "$last_good_range" ] && should_stick_to_range; then
@@ -193,14 +221,15 @@ scan_ipv4_with_ping() {
       local candidate
       candidate="$(random_ip_from_cidr "$use_range")"
       if ping_ip "$candidate" 4; then
-        echo "$candidate" | tee -a "$OUTPUT_V4_ALIVE"
+        printf "${GREEN}%s${RESET}\n" "$candidate"
+        echo "$candidate" >> "$OUTPUT_V4_ALIVE"
         last_good_range="$use_range"
         alive_found=$((alive_found + 1))
         break
       fi
     done
   done
-  print_info "Saved alive IPv4 addresses to: $OUTPUT_V4_ALIVE"
+  print_ok "Saved alive IPv4 addresses to: ${BOLD}$OUTPUT_V4_ALIVE${RESET}"
 }
 
 scan_ipv6_with_ping() {
@@ -208,7 +237,7 @@ scan_ipv6_with_ping() {
   local alive_found=0
   local last_good_range=""
   : > "$OUTPUT_V6_ALIVE"
-  print_info "Starting IPv6 scan to find $target_alive alive IPs (3-ping test each) ..."
+  print_info "Starting ${BOLD}IPv6${RESET} scan to find ${BOLD}$target_alive${RESET} alive IPs ${GRAY}(3 pings)${RESET} ..."
   while [ "$alive_found" -lt "$target_alive" ]; do
     local use_range
     if [ -n "$last_good_range" ] && should_stick_to_range; then
@@ -220,33 +249,37 @@ scan_ipv6_with_ping() {
       local candidate
       candidate="$(random_ip_from_cidr "$use_range")"
       if ping_ip "$candidate" 6; then
-        echo "$candidate" | tee -a "$OUTPUT_V6_ALIVE"
+        printf "${GREEN}%s${RESET}\n" "$candidate"
+        echo "$candidate" >> "$OUTPUT_V6_ALIVE"
         last_good_range="$use_range"
         alive_found=$((alive_found + 1))
         break
       fi
     done
   done
-  print_info "Saved alive IPv6 addresses to: $OUTPUT_V6_ALIVE"
+  print_ok "Saved alive IPv6 addresses to: ${BOLD}$OUTPUT_V6_ALIVE${RESET}"
 }
 
 generate_ipv6_without_ping() {
   local count="$1"
   : > "$OUTPUT_V6_GEN"
-  print_info "Generating $count IPv6 addresses from random Spain ranges (no ping) ..."
+  print_info "Generating ${BOLD}$count${RESET} IPv6 addresses from random Spain ranges ${GRAY}(no ping)${RESET} ..."
   for _ in $(seq 1 "$count"); do
     local range
     range="$(pick_one_random_line "$RANGES_V6_FILE")"
-    random_ip_from_cidr "$range" | tee -a "$OUTPUT_V6_GEN"
+    random_ip_from_cidr "$range" | tee -a "$OUTPUT_V6_GEN" >/dev/null
+    # Also print to console prettily
+    random_ip_from_cidr "$range"
   done
-  print_info "Saved generated IPv6 addresses to: $OUTPUT_V6_GEN"
+  print_ok "Saved generated IPv6 addresses to: ${BOLD}$OUTPUT_V6_GEN${RESET}"
 }
 
 main_menu() {
-  echo "Select mode:"
-  echo "  1) IPv4 with ping (find N alive)"
-  echo "  2) IPv6 with ping (find N alive)"
-  echo "  3) IPv6 without ping (generate N addresses)"
+  print_banner
+  printf "${BOLD}Select mode:${RESET}\n"
+  printf "  ${YELLOW}1)${RESET} IPv4 with ping ${GRAY}(find N alive)${RESET}\n"
+  printf "  ${YELLOW}2)${RESET} IPv6 with ping ${GRAY}(find N alive)${RESET}\n"
+  printf "  ${YELLOW}3)${RESET} IPv6 without ping ${GRAY}(generate N addresses)${RESET}\n"
   read -rp "Enter choice [1-3]: " choice
   case "$choice" in
     1)
@@ -277,6 +310,7 @@ main_menu() {
 }
 
 setup() {
+  init_colors
   require_cmd git
   require_cmd grep
   require_cmd sed
